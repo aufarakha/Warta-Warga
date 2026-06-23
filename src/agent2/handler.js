@@ -6,12 +6,14 @@ import { hasLLM } from '../config.js';
 import { logInteraksi } from '../db/index.js';
 import { getHistory, pushTurn } from './convo.js';
 import { isInjection, isOffTopicTask, looksLikeCode, REFUSAL_REPLY } from './guard.js';
+import { handleLapor, consumeLaporReply, hasPendingLapor } from './lapor.js';
 
-export const GREETING = `👋 Halo! Saya *Warta Warga*, asisten info bantuan sosial.
+export const GREETING = `👋 Halo! Saya *Warta Warga*, asisten info bansos & waspada penipuan.
 
 Saya bisa bantu kamu:
 1️⃣ *Tanya info bansos* — mis. "syarat PKH apa?" atau "ada bansos di daerahku?"
 2️⃣ *Cek kabar/klaim* — kirim kabar yang kamu ragukan, mis. "ini benar nggak: ada bantuan 600rb klik link..."
+3️⃣ *Lapor penipuan* — kirim modus yang lagi marak (ngaku petugas/bank/CS, link & undian palsu, minta OTP/transfer, lowongan/investasi bodong, dll). Kalau valid & banyak laporan serupa, saya sebar peringatan ke grup daerahmu (setelah ditinjau pengurus).
 
 Semua jawaban saya bersumber dari info resmi (.go.id/Kemensos) dan selalu saya cantumkan sumbernya. Saya *tidak* menyimpan data pribadimu. 🙏`;
 
@@ -65,6 +67,21 @@ async function lainReply(text, justGreeted, history = []) {
   return 'Hai! 🙂 Aku bisa bantu info bansos (syarat, jadwal, cara daftar) atau cek kabar/klaim yang kamu ragukan. Mau yang mana?';
 }
 
+// Bug 3: percakapan AMBIGU (cek vs lapor) yang menunggu pilihan warga. Efemeral, RAM, no-PII.
+const pendingAmbigu = new Map(); // sessionId -> { text, ts }
+const AMBIGU_TTL = 10 * 60 * 1000;
+function getAmbigu(sessionId) {
+  const e = pendingAmbigu.get(sessionId);
+  if (!e) return null;
+  if (Date.now() - e.ts > AMBIGU_TTL) {
+    pendingAmbigu.delete(sessionId);
+    return null;
+  }
+  return e;
+}
+const ASK_AMBIGU =
+  'Oke 🙏 ini mau *dicek kebenarannya*, atau mau *dilaporkan* sebagai modus penipuan? (balas "cek" atau "lapor")';
+
 /**
  * Proses satu pesan berisi konten (sudah lolos filter kanal di layer WA).
  * @param {object} p
@@ -83,6 +100,35 @@ export async function respondToMessage({ text, konteks, scopeTags = null, wilaya
     return { reply: REFUSAL_REPLY, jenis: 'lain', label: 'ditolak', grounded: false };
   }
 
+  // Jika ada percakapan lapor yang tertunda (nunggu isi laporan / daerah) → tangkap di sini
+  // sebelum klasifikasi, supaya jawaban lanjutan tidak salah dianggap pesan baru.
+  if (sessionId && hasPendingLapor(sessionId)) {
+    const res = await consumeLaporReply({ sessionId, text, wilayahTag, scopeTags });
+    if (res) {
+      logInteraksi({ konteks, jenis: 'lapor', label: null, wilayahTag });
+      return { reply: res.reply, jenis: 'lapor', label: null, grounded: false };
+    }
+  }
+
+  // Bug 3: ada pertanyaan ambigu yang nunggu pilihan "cek" vs "lapor"? → arahkan ke jalur yang dipilih.
+  if (sessionId && getAmbigu(sessionId)) {
+    const asal = getAmbigu(sessionId).text; // teks kejadian asli
+    const t = text.toLowerCase();
+    if (/\b(cek|verifikasi|verif|benar|bener|valid|hoaks|hoax)\b/.test(t)) {
+      pendingAmbigu.delete(sessionId);
+      const res = await checkClaim(asal, { scopeTags, history: getHistory(sessionId) });
+      logInteraksi({ konteks, jenis: 'klaim', label: res.label, wilayahTag });
+      return { reply: res.text, jenis: 'klaim', label: res.label, grounded: true };
+    }
+    if (/\b(lapor|laporin|laporkan|adu|ngadu|modus|tipu|penipuan)\b/.test(t)) {
+      pendingAmbigu.delete(sessionId);
+      const res = await handleLapor({ text: asal, wilayahTag, scopeTags, sessionId });
+      logInteraksi({ konteks, jenis: 'lapor', label: null, wilayahTag });
+      return { reply: res.reply, jenis: 'lapor', label: null, grounded: false };
+    }
+    return { reply: ASK_AMBIGU, jenis: 'ambigu', label: null, grounded: false }; // belum jelas → tanya lagi
+  }
+
   const history = getHistory(sessionId); // konteks chat efemeral (RAM), untuk follow-up
   // Pakai klasifikasi yang sudah dihitung pemanggil bila ada (hindari klasifikasi dobel).
   const jenis = jenisIn || (await classifyIntent(text)).jenis;
@@ -91,7 +137,17 @@ export async function respondToMessage({ text, konteks, scopeTags = null, wilaya
   let label = null;
   let grounded = false; // info: apakah jawaban benar-benar bersumber (ada hit relevan)?
 
-  if (jenis === 'klaim') {
+  if (jenis === 'ambigu') {
+    // Niat belum jelas (cek vs lapor) → tanya balik, simpan teks kejadian buat diteruskan.
+    if (sessionId) pendingAmbigu.set(sessionId, { text, ts: Date.now() });
+    logInteraksi({ konteks, jenis: 'ambigu', label: null, wilayahTag });
+    return { reply: ASK_AMBIGU, jenis: 'ambigu', label: null, grounded: false };
+  } else if (jenis === 'lapor') {
+    // Teks laporan (bisa memuat PII yang diketik warga) sengaja TIDAK disimpan ke memori obrolan.
+    const res = await handleLapor({ text, wilayahTag, scopeTags, sessionId });
+    logInteraksi({ konteks, jenis: 'lapor', label: null, wilayahTag });
+    return { reply: res.reply, jenis: 'lapor', label: null, grounded: false };
+  } else if (jenis === 'klaim') {
     const res = await checkClaim(text, { scopeTags, history });
     reply = res.text;
     label = res.label;

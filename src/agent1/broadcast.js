@@ -1,5 +1,11 @@
 import crypto from 'node:crypto';
-import { listActiveGrups, wasBroadcast, markBroadcast } from '../db/index.js';
+import {
+  listActiveGrups,
+  wasBroadcast,
+  markBroadcast,
+  wasPeringatanSent,
+  markPeringatanTerkirim,
+} from '../db/index.js';
 import { groupScopeTags, infoMatchesScope, humanWilayah } from '../util/wilayah.js';
 import { formatTanggalID, isExpiredDate, masaBerlakuNotice } from '../util/tanggal.js';
 
@@ -83,9 +89,29 @@ function safeParseArray(v) {
   }
 }
 
+/** Grup terdaftar (opt-in) yang relevan untuk sebuah wilayah_tag (filter hierarkis §6.3). */
+export function grupsForWilayah(wilayahTag) {
+  return listActiveGrups().filter((g) => infoMatchesScope(wilayahTag, groupScopeTags(g)));
+}
+
 /** Grup terdaftar yang relevan untuk info ini (filter hierarkis §6.3). */
 function targetGrups(rec) {
-  return listActiveGrups().filter((g) => infoMatchesScope(rec.wilayah_tag, groupScopeTags(g)));
+  return grupsForWilayah(rec.wilayah_tag);
+}
+
+/** Kirim satu teks ke daftar grup dengan jeda acak anti-spam. @returns {Promise<number>} grup berhasil */
+async function sendToGrups(targets, text) {
+  let okGrup = 0;
+  for (let i = 0; i < targets.length; i++) {
+    try {
+      await _sender(targets[i].id_grup, text);
+      okGrup++;
+    } catch (e) {
+      console.warn(`[Broadcast] gagal kirim ke ${targets[i].id_grup}: ${e?.message}`);
+    }
+    if (i < targets.length - 1) await delay(randomGap());
+  }
+  return okGrup;
 }
 
 /**
@@ -131,4 +157,48 @@ export async function broadcastNewInfos(records) {
     }
   }
   return { sent, infos };
+}
+
+// ===================== PERINGATAN DINI (Fitur Lapor) =====================
+
+/** Susun kartu peringatan dini. UMUM & tanpa identitas pelapor (Rambu 2 PRD). */
+export function formatPeringatan(laporan) {
+  const lines = [`⚠️ *Peringatan Dini Penipuan — ${humanWilayah(laporan.wilayah_tag)}*`, ''];
+  // teks_peringatan = ringkasan modus yang sudah dibersihkan dari PII (oleh Agent saat lapor).
+  lines.push(laporan.teks_peringatan || laporan.isi_ringkas || 'Ada laporan modus penipuan mengatasnamakan bansos di daerah ini.');
+  if (laporan.jumlah_serupa > 1) lines.push('', `📈 _${laporan.jumlah_serupa} laporan serupa diterima di daerah ini._`);
+  lines.push(
+    '',
+    '*Tips aman:*',
+    '• Bansos resmi *GRATIS* — tidak ada biaya/transfer/pulsa.',
+    '• Jangan beri OTP/PIN/NIK/data pribadi ke siapa pun.',
+    '• Cek hanya di cekbansos.kemensos.go.id atau tanya RT/pengurus.',
+  );
+  if (laporan.dasar_verifikasi) lines.push('', `_Dasar tinjauan: ${laporan.dasar_verifikasi}_`);
+  lines.push('', '_Peringatan Warta Warga — disebar setelah ditinjau pengurus. Identitas pelapor tidak disimpan._');
+  return lines.join('\n');
+}
+
+/**
+ * Sebar peringatan dini untuk satu laporan yang SUDAH di-approve pengurus.
+ * Reuse: filter wilayah (§6.3), opt-in (/start), jeda acak anti-spam, dedup (peringatan_terkirim).
+ * @returns {Promise<{sent:number, grupCount:number, reason?:string}>}
+ */
+export async function broadcastPeringatan(laporan) {
+  if (!_sender) return { sent: 0, grupCount: 0, reason: 'no-sender' }; // bot offline → tunda diam-diam
+  if (!laporan || laporan.status_approval !== 'disetujui') {
+    return { sent: 0, grupCount: 0, reason: 'belum-disetujui' }; // Lapis 2: wajib approval manusia
+  }
+  if (wasPeringatanSent(laporan.id)) return { sent: 0, grupCount: 0, reason: 'sudah-dikirim' };
+
+  const targets = grupsForWilayah(laporan.wilayah_tag);
+  if (targets.length === 0) return { sent: 0, grupCount: 0, reason: 'tak-ada-grup' };
+
+  const text = formatPeringatan(laporan);
+  const okGrup = await sendToGrups(targets, text);
+  if (okGrup > 0) {
+    markPeringatanTerkirim({ laporanId: laporan.id, wilayahTag: laporan.wilayah_tag, grupCount: okGrup });
+    console.log(`[Peringatan] ⚠️ laporan #${laporan.id} (${laporan.wilayah_tag}) → ${okGrup} grup.`);
+  }
+  return { sent: okGrup, grupCount: okGrup };
 }

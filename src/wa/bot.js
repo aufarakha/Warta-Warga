@@ -361,7 +361,9 @@ async function discoverAndFollowUp(sock, jid, { text, konteks, scopeTags, target
         `Maaf kak, udah aku cari di situs resmi tapi belum nemu info bansos buat *${humanWilayah(target)}* 🙏 ` +
         `Coba cek langsung di cekbansos.kemensos.go.id atau tanya RT/pengurus setempat ya.`;
     }
-    await sock.sendMessage(jid, { text: out });
+    // Beri label agar jelas ini JAWABAN TERTUNDA dari pertanyaan tadi (datang setelah jeda
+    // pencarian), bukan pesan acak di tengah obrolan lain. Mengurangi kesan "bot ngelantur".
+    await sock.sendMessage(jid, { text: `📌 _Lanjutan dari pencarianku tadi soal *${humanWilayah(target)}*:_\n\n${out}` });
   } catch (e) {
     console.warn('[ondemand] gagal:', e?.message);
     await sock

@@ -117,6 +117,99 @@ export function markBroadcast({ fingerprint, program, wilayahTag, grupCount }) {
     .run(fingerprint, program || null, wilayahTag || null, grupCount ?? 0, new Date().toISOString());
 }
 
+// ---------- laporan (Lapor & Peringatan Dini) ----------
+
+/** Simpan laporan baru (TANPA identitas pelapor). @returns {number} id */
+export function insertLaporan({ isiRingkas, modusKey, wilayahTag, status, dasarVerifikasi, teksPeringatan }) {
+  const now = new Date().toISOString();
+  const res = getDb()
+    .prepare(
+      `INSERT INTO laporan (isi_ringkas, modus_key, wilayah_tag, status, dasar_verifikasi, teks_peringatan, timestamp, updated_ts)
+       VALUES (@isi, @modus, @wilayah, @status, @dasar, @teks, @ts, @ts)`,
+    )
+    .run({
+      isi: isiRingkas,
+      modus: modusKey || null,
+      wilayah: wilayahTag,
+      status,
+      dasar: dasarVerifikasi || null,
+      teks: teksPeringatan || null,
+      ts: now,
+    });
+  return res.lastInsertRowid;
+}
+
+/** Cari laporan PENDING sejenis (modus + wilayah + STATUS sama) untuk clustering (L5). */
+export function findClusterLaporan({ modusKey, wilayahTag, status }) {
+  if (!modusKey) return null;
+  return getDb()
+    .prepare(
+      `SELECT * FROM laporan
+       WHERE modus_key = ? AND wilayah_tag = ? AND status = ? AND status_approval = 'menunggu'
+       ORDER BY id DESC LIMIT 1`,
+    )
+    .get(modusKey, wilayahTag, status);
+}
+
+/** Tambah counter laporan serupa (clustering, bukan baris baru). */
+export function bumpLaporanSerupa(id) {
+  getDb()
+    .prepare(`UPDATE laporan SET jumlah_serupa = jumlah_serupa + 1, updated_ts = ? WHERE id = ?`)
+    .run(new Date().toISOString(), id);
+  return getLaporan(id);
+}
+
+export function getLaporan(id) {
+  return getDb().prepare('SELECT * FROM laporan WHERE id = ?').get(id);
+}
+
+/** Antrian approval: jelas_penipuan yang masih menunggu (L4). Prioritas: terbanyak dulu. */
+export function listAntrianApproval() {
+  return getDb()
+    .prepare(
+      `SELECT * FROM laporan
+       WHERE status = 'jelas_penipuan' AND status_approval = 'menunggu'
+       ORDER BY jumlah_serupa DESC, id DESC`,
+    )
+    .all();
+}
+
+/** L5: laporan belum_pasti yang menumpuk (≥ minSerupa) → ikut diangkat untuk ditinjau. */
+export function listPrioritasBelumPasti(minSerupa = 3) {
+  return getDb()
+    .prepare(
+      `SELECT * FROM laporan
+       WHERE status = 'belum_pasti' AND status_approval = 'menunggu' AND jumlah_serupa >= ?
+       ORDER BY jumlah_serupa DESC, id DESC`,
+    )
+    .all(minSerupa);
+}
+
+/** Pengurus approve/tolak (Lapis 2 — human-in-the-loop). teksPeringatan opsional (edit sebelum sebar). */
+export function setApprovalLaporan(id, statusApproval, teksPeringatan) {
+  const now = new Date().toISOString();
+  if (teksPeringatan != null) {
+    getDb().prepare(`UPDATE laporan SET status_approval = ?, teks_peringatan = ?, updated_ts = ? WHERE id = ?`)
+      .run(statusApproval, teksPeringatan, now, id);
+  } else {
+    getDb().prepare(`UPDATE laporan SET status_approval = ?, updated_ts = ? WHERE id = ?`)
+      .run(statusApproval, now, id);
+  }
+  return getLaporan(id);
+}
+
+// ---------- peringatan_terkirim (dedup siaran peringatan) ----------
+
+export function wasPeringatanSent(laporanId) {
+  return Boolean(getDb().prepare('SELECT 1 FROM peringatan_terkirim WHERE laporan_id = ?').get(laporanId));
+}
+
+export function markPeringatanTerkirim({ laporanId, wilayahTag, grupCount }) {
+  getDb()
+    .prepare(`INSERT INTO peringatan_terkirim (laporan_id, wilayah_tag, grup_count, timestamp) VALUES (?, ?, ?, ?)`)
+    .run(laporanId, wilayahTag || null, grupCount ?? 0, new Date().toISOString());
+}
+
 // ---------- kb_chunks (vector store) ----------
 
 export function insertChunk(c) {

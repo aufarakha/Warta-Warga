@@ -51,6 +51,31 @@ CREATE TABLE IF NOT EXISTS broadcast_log (
   ts          TEXT NOT NULL
 );
 
+-- Laporan penipuan/hoaks dari warga (Fitur Lapor & Peringatan Dini).
+-- NO-PII: TIDAK ada kolom nama/nomor/identitas pelapor. Hanya isi modus + wilayah.
+CREATE TABLE IF NOT EXISTS laporan (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  isi_ringkas      TEXT NOT NULL,             -- ringkasan modus, tanpa data pribadi pelapor
+  modus_key        TEXT,                       -- label modus singkat untuk clustering (mis. "biaya_pencairan")
+  wilayah_tag      TEXT NOT NULL,
+  status           TEXT NOT NULL,             -- jelas_penipuan | belum_pasti | bukan_penipuan
+  jumlah_serupa    INTEGER NOT NULL DEFAULT 1, -- counter laporan sejenis sewilayah
+  status_approval  TEXT NOT NULL DEFAULT 'menunggu', -- menunggu | disetujui | ditolak
+  dasar_verifikasi TEXT,                       -- ringkas hasil cek AI (opsional)
+  teks_peringatan  TEXT,                       -- teks siap-sebar (boleh diedit pengurus sebelum approve)
+  timestamp        TEXT NOT NULL,
+  updated_ts       TEXT
+);
+
+-- Jejak peringatan yang sudah disebar (dedup, konsisten dengan pola broadcast_log).
+CREATE TABLE IF NOT EXISTS peringatan_terkirim (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  laporan_id   INTEGER REFERENCES laporan(id) ON DELETE CASCADE,
+  wilayah_tag  TEXT,
+  grup_count   INTEGER,
+  timestamp    TEXT NOT NULL
+);
+
 -- Log interaksi ANONIM — hanya untuk tren kebutuhan, tanpa identitas pribadi
 CREATE TABLE IF NOT EXISTS log_interaksi (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,

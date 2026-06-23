@@ -111,6 +111,9 @@ const STOP_DAERAH = new Set([
   'kak', 'pak', 'bu', 'mas', 'mbak', 'tau', 'tahu', 'cek', 'gimana', 'bagaimana', 'berapa', 'kapan',
   // kata ganti/penunjuk → bukan nama daerah ("kabupaten saya", "kota ini")
   'saya', 'aku', 'kami', 'kita', 'sini', 'sana', 'ini', 'situ', 'daerahku', 'daerah', 'tempatku', 'tempat',
+  // kata WAKTU & filler umum → sering salah tertangkap ("kota saat ini", "kota sekarang")
+  'saat', 'sekarang', 'skrg', 'kini', 'kemarin', 'besok', 'nanti', 'tadi', 'barusan',
+  'ku', 'mu', 'nya', 'dia', 'mereka', 'kamu', 'mana', 'yang', 'sekitar', 'wilayah', 'kotaku', 'kotamu',
 ]);
 
 export function detectWilayahFromText(text) {
