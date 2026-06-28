@@ -70,9 +70,9 @@ export function getCaptchaSolverProviders() {
 }
 
 function parseCaptchaText(raw) {
-  const text = clean(raw);
-  if (!text || text.length > 40) {
-    throw new Error("Captcha solver returned unexpected/empty text");
+  const text = clean(raw).replace(/```/g, "").replace(/\s+/g, " ").trim();
+  if (!text) {
+    throw new Error("Captcha solver returned empty text");
   }
 
   const matches = text.match(/[A-Za-z0-9]+/g);
@@ -80,7 +80,7 @@ function parseCaptchaText(raw) {
     throw new Error("Captcha solver returned no alphanumeric characters");
   }
 
-  return matches.join("");
+  return matches.join("").slice(0, 20);
 }
 
 async function solveWithProvider(provider, buffer, mimetype) {
