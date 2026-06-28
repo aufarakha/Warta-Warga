@@ -9,6 +9,7 @@
     "start": "node src/index.js",
     "bot": "node src/index.js",
     "seed": "node scripts/seed.js",
+    "seed:laporan": "node scripts/seed-laporan.js",
     "ingest": "node src/ingest.js",
     "scrape": "node src/scrape.js",
     "demo": "node scripts/demo.js",
