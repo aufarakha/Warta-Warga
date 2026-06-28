@@ -1,8 +1,8 @@
 import { chromium } from "playwright-core";
 import fs from "node:fs";
 import path from "node:path";
-import { config, hasLaporGub, hasVision } from "../config.js";
-import { solveCaptchaImage } from "../agent2/captcha.js";
+import { config, hasLaporGub } from "../config.js";
+import { getCaptchaSolverProviders, solveCaptchaImage } from "../agent2/captcha.js";
 
 const BASE_URL = config.laporgub.baseUrl;
 const SESSION_PATH = config.laporgub.sessionPath;
@@ -19,8 +19,8 @@ export async function solveCaptcha(page) {
     await page.waitForSelector(plainSelector, { state: "attached", timeout: 15000 });
   }
 
-  if (!hasVision()) {
-    throw new Error("Vision API not configured, cannot solve captcha automatically.");
+  if (!getCaptchaSolverProviders().length) {
+    throw new Error("Captcha OCR provider not configured, cannot solve captcha automatically.");
   }
   // Simpler approach (like the Python script): screenshot current visible captcha and OCR it.
   // Retry a few times if the vision call fails or returns empty.
