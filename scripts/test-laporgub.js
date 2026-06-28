@@ -172,7 +172,7 @@ async function formTest() {
     await page.waitForTimeout(500);
     const search = page.locator(".select2-search__field, input.select2-search__field");
     await search.waitFor({ state: "visible", timeout: 15000 });
-    await search.fill("Sokaraja");
+    await search.fill("Kab. Banyumas");
     await page.waitForSelector(".select2-results__option:not(.select2-results__option--disabled)", { timeout: 15000 });
     await page.locator(".select2-results__option").first().click();
     await page.screenshot({ path: path.join(SCREENSHOT_DIR, "06_location_filled.png") });

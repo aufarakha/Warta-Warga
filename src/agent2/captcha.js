@@ -5,18 +5,18 @@ export async function solveCaptchaImage(buffer, mimetype = "image/png") {
     throw new Error("Vision API not configured or captcha image is empty");
   }
 
-  const baseUrl = (process.env.VISION_BASE_URL || process.env.LLM_BASE_URL || "").trim().replace(/\/+$/, "");
+  const baseUrl = (process.env.IMAGE_BASE_URL || process.env.LLM_BASE_URL || "").trim().replace(/\/+$/, "");
   if (!baseUrl) {
     throw new Error("VISION_BASE_URL or LLM_BASE_URL must be set in the environment");
   }
 
   const endpoint = baseUrl.includes("/chat/completions") ? baseUrl : `${baseUrl}/chat/completions`;
-  const apiKey = (process.env.VISION_API_KEY || process.env.LLM_API_KEY || config.vision.apiKey || "").trim();
+  const apiKey = (process.env.IMAGE_API_KEY || process.env.LLM_API_KEY || config.vision.apiKey || "").trim();
   if (!apiKey) {
     throw new Error("VISION_API_KEY or LLM_API_KEY must be set in the environment");
   }
 
-  const model = (process.env.VISION_MODEL || process.env.LLM_MODEL || "").trim();
+  const model = (process.env.CAPTCHA_SOLVER_MODEL || process.env.LLM_MODEL || "").trim();
   if (!model) {
     throw new Error("VISION_MODEL or LLM_MODEL must be set in the environment");
   }

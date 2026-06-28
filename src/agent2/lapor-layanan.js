@@ -70,7 +70,7 @@ async function parseLaporanLayanan(text) {
     `Kamu parser laporan layanan publik. Outputkan JSON valid dengan properti:\n` +
     `{
   "kategori": "listrik|air|jalan|sampah|lainnya",
-  "lokasi": "nama kabupaten/kota spesifik, atau null jika tidak ada",
+  "lokasi": "nama kabupaten/kota spesifik, atau null jika tidak ada. Jangan tambahkan 'Kab./Kota', dsb.",
   "deskripsi": "ringkas 1-2 kalimat tentang masalahnya, tanpa nama/nomor"
 }` +
     `\n\nLaporan: """${text.slice(0, 1200)}"""`;
@@ -105,7 +105,7 @@ function normalizeLaporanLocation(lokasi) {
 
 const ASK_SERVICE_DETAIL = 'Silakan ceritakan masalahnya ya. Contoh: "listrik mati di jalan Sudirman, Kota Semarang" atau "air PDAM tidak keluar sejak pagi".';
 const ASK_SERVICE_LOCATION = 'Untuk mengirim aduan ke LaporGub, sebutkan dulu kabupaten/kota yang terkena. Misal: "Kab. Banyumas" atau "Kota Semarang".';
-const ASK_SERVICE_CONFIRM = (kategori, lokasi, deskripsi) => `Ini aduan *${kategori}* untuk *${humanWilayah(lokasi)}*:\n` + `${deskripsi}\n\n` + "Kalau sudah benar, balas *Ya* untuk saya kirim ke LaporGub. Kalau belum, balas *Tidak*.";
+const ASK_SERVICE_CONFIRM = (kategori, lokasi, deskripsi) => `Ini aduan *${kategori}* untuk Kab./Kota *${humanWilayah(lokasi)}*:\n` + `${deskripsi}\n\n` + "Kalau sudah benar, balas *Ya* untuk saya kirim ke LaporGub. Kalau belum, balas *Tidak*.";
 
 function tempFilePath(buffer, mimetype) {
   const ext = mimetype?.split("/")[1] || "jpg";

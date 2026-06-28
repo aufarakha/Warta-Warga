@@ -13,35 +13,45 @@ function ensureDir(filePath) {
 
 export async function solveCaptcha(page) {
   const selectors = ["img#img-captcha", "img[src*='/captcha/']", "#img-captcha-desktop", "#img-captcha"];
-  const selector = selectors.join(", ");
 
   if (!hasVision()) {
     throw new Error("Vision API not configured, cannot solve captcha automatically.");
   }
 
   for (let attempt = 0; attempt < 3; attempt++) {
-    const img = page.locator(selector).first();
-    try {
-      await img.waitFor({ state: "visible", timeout: 15000 });
-    } catch {
-      await page.waitForSelector(selector, { state: "attached", timeout: 15000 });
+    const targetSelector = await page.evaluate((candidateSelectors) => {
+      for (const selector of candidateSelectors) {
+        const elements = Array.from(document.querySelectorAll(selector));
+        for (const element of elements) {
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          if (rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0") {
+            return selector;
+          }
+        }
+      }
+      return null;
+    }, selectors);
+
+    if (!targetSelector) {
+      await page.waitForTimeout(1000);
+      continue;
     }
 
+    const img = page.locator(targetSelector).first();
     try {
-      await page.waitForFunction(
-        (sel) => {
-          const el = document.querySelector(sel);
-          return !!(el && el.complete && el.naturalWidth && el.naturalWidth > 0);
-        },
-        selector,
-        { timeout: 5000 },
-      );
+      await img.scrollIntoViewIfNeeded();
     } catch {
       // continue with screenshot attempt
     }
 
-    await page.waitForTimeout(1000);
-    const screenshot = await img.screenshot();
+    const box = await img.boundingBox().catch(() => null);
+    let screenshot;
+    if (box && box.width > 0 && box.height > 0) {
+      screenshot = await page.screenshot({ clip: { x: box.x, y: box.y, width: box.width, height: box.height } });
+    } else {
+      screenshot = await page.screenshot();
+    }
 
     try {
       const text = await solveCaptchaImage(screenshot, "image/png");
@@ -162,11 +172,13 @@ export async function submitLaporGub({ isiAduan, lokasiAduan, jenisAduan = "Publ
     throw new Error("LaporGub credentials are not configured");
   }
 
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: false });
   try {
     const context = await createContext(browser);
     await loginIfNeeded(context);
-    const page = await context.newPage();
+
+    // Buka halaman baru setelah loginIfNeeded selesai sepenuhnya
+    page = await context.newPage();
     await page.goto(`${BASE_URL}/buat-aduan`, { waitUntil: "networkidle" });
 
     if (page.url().includes("/login")) {
