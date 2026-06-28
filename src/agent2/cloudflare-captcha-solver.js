@@ -2,7 +2,7 @@ import { config } from '../config.js';
 
 function getSolverConfig() {
   const { cloudflareCaptcha } = config;
-  const selectedProvider = cloudflareCaptcha.provider || "gemini";
+  const selectedProvider = cloudflareCaptcha.provider || "openrouter";
 
   console.log(`[Solver-Config] Provider selected: ${selectedProvider}`);
   console.log(`[Solver-Config] OpenRouter Key available: ${cloudflareCaptcha.openrouterApiKey ? 'Yes' : 'No'}`);
@@ -70,7 +70,7 @@ async function callVisionApi(imageBuffer) {
         model = solverConfig.openrouterModel;
         headers["HTTP-Referer"] = config.openrouter.appUrl;
         headers["X-Title"] = config.openrouter.appName;
-    } else { // default to gemini
+    } else {
         endpoint = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
         apiKey = solverConfig.geminiApiKey;
         model = solverConfig.geminiModel;

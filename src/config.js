@@ -46,7 +46,7 @@ export const config = {
 
   cloudflareCaptcha: {
     enabled: (process.env.CLOUDFLARE_CAPTCHA_SOLVER ?? "true") !== "false",
-    provider: process.env.CLOUDFLARE_CAPTCHA_PROVIDER || "gemini", // gemini or openrouter
+    provider: process.env.CLOUDFLARE_CAPTCHA_PROVIDER || "openrouter",
     geminiApiKey: process.env.CLOUDFLARE_GEMINI_API_KEY || process.env.VISION_API_KEY || "",
     geminiModel: process.env.CLOUDFLARE_GEMINI_MODEL || "gemini-flash-lite-latest",
     openrouterApiKey: process.env.CLOUDFLARE_OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY || "",

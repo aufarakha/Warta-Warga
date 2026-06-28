@@ -40,18 +40,13 @@ Konfigurasi:
 ```env
 CLOUDFLARE_CAPTCHA_SOLVER=true
 CLOUDFLARE_CAPTCHA_PROVIDER=openrouter
-CLOUDFLARE_GEMINI_API_KEY=
-CLOUDFLARE_GEMINI_MODEL=gemini-flash-lite-latest
 CLOUDFLARE_OPENROUTER_API_KEY=
 CLOUDFLARE_OPENROUTER_MODEL=google/gemini-flash-1.5
 CLOUDFLARE_CAPTCHA_MAX_RETRIES=3
 CLOUDFLARE_CAPTCHA_TIMEOUT_MS=60000
 ```
 
-Provider:
-
-- `gemini`: gunakan Gemini API dari AI Studio.
-- `openrouter`: gunakan model vision lewat OpenRouter.
+Provider Cloudflare AduanKonten memakai OpenRouter.
 
 Kode terkait:
 
