@@ -1,8 +1,8 @@
 import { chromium } from "playwright-core";
 import fs from "node:fs";
 import path from "node:path";
-import { config, hasLaporGub, hasVision } from "../config.js";
-import { solveCaptchaImage } from "../agent2/captcha.js";
+import { config, hasLaporGub } from "../config.js";
+import { getCaptchaSolverProviders, solveCaptchaImage } from "../agent2/captcha.js";
 
 const BASE_URL = config.laporgub.baseUrl;
 const SESSION_PATH = config.laporgub.sessionPath;
@@ -14,8 +14,8 @@ function ensureDir(filePath) {
 export async function solveCaptcha(page) {
   const selectors = ["img#img-captcha", "img[src*='/captcha/']", "#img-captcha-desktop", "#img-captcha"];
 
-  if (!hasVision()) {
-    throw new Error("Vision API not configured, cannot solve captcha automatically.");
+  if (!getCaptchaSolverProviders().length) {
+    throw new Error("Captcha OCR provider not configured, cannot solve captcha automatically.");
   }
 
   for (let attempt = 0; attempt < 3; attempt++) {
