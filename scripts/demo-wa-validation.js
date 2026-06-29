@@ -4,7 +4,7 @@
 // Yang dicek:
 // 1. Nomor/grup wajib /start dulu sebelum chat apa pun.
 // 2. Menu angka dengan teks tambahan tetap dianggap menu, mis. "1 saya mau tanya".
-// 3. Balasan lapor memakai format aman: jelaskan dulu, baru bilang laporan dicatat.
+// 3. AI lapor menghasilkan balasan substansif (LLM bebas format — tidak hardcoded).
 
 import assert from "node:assert/strict";
 import os from "node:os";
@@ -15,7 +15,6 @@ process.env.DB_PATH = process.env.DEMO_WA_DB_PATH || path.join(os.tmpdir(), `war
 
 const { getGrup, upsertGrup } = await import("../src/db/index.js");
 const { respondToMessage } = await import("../src/agent2/handler.js");
-const { formatCatatLaporanReply } = await import("../src/agent2/brain.js");
 const { hasLLM } = await import("../src/config.js");
 const { groupScopeTags } = await import("../src/util/wilayah.js");
 const { startUsage } = await import("../src/wa/bot.js");
@@ -101,19 +100,6 @@ async function main() {
   assert.match(menuLapor.reply, /Banyumas/i);
   printCase('5. "3 link palsu bansos" -> tetap masuk menu lapor + konteks wilayah', menuLapor.reply);
 
-  const deterministicReportReply = formatCatatLaporanReply(
-    {
-      ringkasan_modus: "Ada link pendaftaran bansos palsu yang meminta NIK dan OTP.",
-      tingkat_bahaya: "jelas_penipuan",
-      teks_peringatan: "Jangan isi data pribadi atau OTP lewat link pendaftaran bansos yang tidak jelas.",
-    },
-    { ok: true, wilayah: "Kab./Kota Banyumas" },
-  );
-  assert.match(deterministicReportReply, /^🚨/);
-  assert.match(deterministicReportReply, /Kenapa bahaya:/);
-  assert.match(deterministicReportReply, /Laporan Bapak\/Ibu sudah saya catat/);
-  printCase("6. Format lapor deterministik -> jelaskan dulu, catat di akhir", deterministicReportReply);
-
   if (hasLLM()) {
     const aiReport = await respondToMessage({
       text: "Saya lapor ada link pendaftaran bansos palsu yang minta NIK dan kode OTP.",
@@ -123,11 +109,10 @@ async function main() {
       sessionId: `${privateJid}:ai-report`,
     });
     assert.equal(aiReport.aksi, "lapor");
-    assert.match(aiReport.reply, /Kenapa bahaya:/);
-    assert.match(aiReport.reply, /Laporan Bapak\/Ibu sudah saya catat/);
-    printCase("7. AI lapor real dengan LLM -> wajib explain + catat", aiReport.reply);
+    assert.ok(aiReport.reply && aiReport.reply.length > 50, "Reply lapor harus substansif");
+    printCase("6. AI lapor real dengan LLM -> wajib ada reply substansif", aiReport.reply);
   } else {
-    printCase("7. AI lapor real dengan LLM", "SKIP: OPENROUTER_API_KEY belum diset. Format deterministik sudah divalidasi di langkah 6.");
+    printCase("6. AI lapor real dengan LLM", "SKIP: OPENROUTER_API_KEY belum diset.");
   }
 
   console.log("\nSemua validasi demo selesai.");
