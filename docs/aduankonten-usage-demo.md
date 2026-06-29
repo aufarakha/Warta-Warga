@@ -38,14 +38,6 @@ CLOUDFLARE_OPENROUTER_API_KEY=
 CLOUDFLARE_OPENROUTER_MODEL=google/gemini-flash-1.5
 ```
 
-Atau Gemini langsung:
-
-```env
-CLOUDFLARE_CAPTCHA_PROVIDER=gemini
-CLOUDFLARE_GEMINI_API_KEY=
-CLOUDFLARE_GEMINI_MODEL=gemini-flash-lite-latest
-```
-
 ## Dry Run WhatsApp Flow
 
 Dry-run hanya menguji intent, parsing, dan teks konfirmasi. Tidak mengirim laporan produksi.
