@@ -5,11 +5,14 @@ import { chatJson } from "../llm/openrouter.js";
 import { hasAduanKonten, hasLLM } from "../config.js";
 import { insertLaporanLayanan, updateLaporanLayananStatus, insertLaporanLayananSubmitLog } from "../db/index.js";
 import { ADUANKONTEN_CATEGORIES, submitAduanKonten } from "../portal/aduankonten.js";
+import { inspectUrl } from "./checkurl.js";
 
 const URL_RE = /\b(?:https?:\/\/[^\s<>"'`]+|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?:\/[^\s<>"'`]*)?)/i;
 const REPORT_WORDS = /\b(lapor|laporkan|pengaduan|aduan|adukan|report|blokir|blokirkan|takedown|take\s*down)\b/i;
 const EXPLICIT_ADUANKONTEN_HINTS = /\b(aduan\s*konten|konten\s*negatif|blokir|blokirkan|takedown|take\s*down)\b/i;
+const WEB_REPORT_HINTS = /\b(situs|website|web|url|link|domain|akun|aplikasi)\b/i;
 const NEGATIVE_CONTENT_HINTS = /\b(judi|slot|togel|casino|taruhan|betting|penipuan|phishing|scam|hoaks|hoax|pinjol\s*ilegal|investasi\s*ilegal|pornografi|porno|pemerasan|malware|retas|kebocoran\s*data)\b/i;
+const GAMBLING_SITE_HINTS = /(?:\b(judi|slot|togel|casino|taruhan|betting|gacor|maxwin|scatter|pragmatic|pgsoft|habanero|spadegaming|sbobet|poker|roulette|blackjack|jackpot|zeus|olympus)\b|rtp\s*slot|mahjong\s*ways|starlight\s*princess|\bslot\d+\b|\bdewa\d+[a-z0-9-]*\b)/i;
 const PENDING_TTL = 15 * 60 * 1000;
 
 const pendingKonten = new Map();
@@ -64,15 +67,21 @@ function normalizeCategoryKey(value) {
   return null;
 }
 
-function detectCategoryKey(text, url = "") {
+function detectCategoryHintKey(text, url = "") {
   const hay = `${text || ""} ${url || ""}`.toLowerCase();
-  if (/\b(judi|slot|togel|casino|taruhan|betting)\b/i.test(hay)) return "perjudian";
+  if (GAMBLING_SITE_HINTS.test(hay)) return "perjudian";
   if (/\b(hoaks|hoax|berita bohong|disinformasi|misinformasi)\b/i.test(hay)) return "hoaks";
   if (/\b(phishing|scam|penipuan|tipu|otp|rekening|hadiah|undian|login palsu|akun palsu)\b/i.test(hay)) return "penipuan";
   if (/\b(pornografi|porno|seksual eksplisit)\b/i.test(hay)) return "pornografi";
   if (/\b(pemerasan|ancaman sebar|sextortion)\b/i.test(hay)) return "pemerasan";
   if (/\b(pinjol ilegal|investasi ilegal|keuangan ilegal)\b/i.test(hay)) return "rekomendasi_sektor";
   if (/\b(retas|malware|deface|kebocoran data|credential|kredensial)\b/i.test(hay)) return "keamanan_informasi";
+  return null;
+}
+
+function detectCategoryKey(text, url = "") {
+  const hinted = detectCategoryHintKey(text, url);
+  if (hinted) return hinted;
   return "penipuan";
 }
 
@@ -106,6 +115,175 @@ function stripUrlFromText(text, url) {
     .trim();
 }
 
+function isWeakReason(text) {
+  const normalized = String(text || "")
+    .toLowerCase()
+    .replace(/\b(saya|aku|kami|mau|ingin|tolong|mohon|website|situs|web|link|url|domain|ini|tersebut|dong|ya)\b/g, "")
+    .replace(/[^a-z0-9]+/g, "")
+    .trim();
+  return normalized.length < 8;
+}
+
+function inspectionHaystack(inspection) {
+  if (!inspection) return "";
+  return [
+    inspection.input_url,
+    inspection.final_url,
+    inspection.host,
+    inspection.page_title,
+    inspection.download_type,
+    ...(inspection.redirect_chain || []).map((hop) => hop?.to),
+    ...(inspection.field_mencurigakan || []),
+    inspection.render_diblokir ? "render diblokir anti bot" : "",
+    inspection.minta_data_sensitif ? "minta data sensitif phishing login otp password" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function hostFromUrl(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
+function describeInspectionTarget(inspection, fallbackUrl) {
+  const finalUrl = inspection?.final_url || fallbackUrl;
+  const host = inspection?.host || hostFromUrl(finalUrl);
+  const title = String(inspection?.page_title || "").replace(/\s+/g, " ").trim();
+  if (title && host) return `${title} (${host})`;
+  if (host) return `domain ${host}`;
+  return "konten tersebut";
+}
+
+function reasonFromInspection({ url, categoryKey, inspection, userReason }) {
+  const target = describeInspectionTarget(inspection, url);
+  const finalUrl = inspection?.final_url && inspection.final_url !== url ? inspection.final_url : null;
+  const redirectNote = finalUrl ? ` URL pendek tersebut mengarah ke ${finalUrl}.` : "";
+
+  if (categoryKey === "perjudian") {
+    return `Berdasarkan pemeriksaan awal, URL ${url} mengarah ke ${target} yang diduga memuat promosi atau layanan perjudian online.${redirectNote}`;
+  }
+  if (categoryKey === "hoaks") {
+    return `Berdasarkan pemeriksaan awal, URL ${url} diduga memuat informasi bohong atau menyesatkan yang dapat merugikan masyarakat.${redirectNote}`;
+  }
+  if (categoryKey === "pornografi") {
+    return `Berdasarkan pemeriksaan awal, URL ${url} diduga memuat konten pornografi atau materi seksual eksplisit yang dapat diakses publik.${redirectNote}`;
+  }
+  if (categoryKey === "pemerasan") {
+    return `Berdasarkan pemeriksaan awal, URL ${url} diduga digunakan untuk pemerasan atau ancaman terhadap korban.${redirectNote}`;
+  }
+  if (inspection?.minta_data_sensitif) {
+    const fields = inspection.field_mencurigakan?.length ? ` seperti ${inspection.field_mencurigakan.join(", ")}` : "";
+    return `Berdasarkan pemeriksaan awal, URL ${url} mengarah ke ${target} dan terindikasi meminta data sensitif${fields}, sehingga patut dilaporkan sebagai penipuan/phishing.${redirectNote}`;
+  }
+  if (inspection?.render_diblokir) {
+    return `Berdasarkan pemeriksaan awal, URL ${url} mengarah ke ${target}, tetapi isi halaman sulit diperiksa otomatis. Link ini tetap patut ditinjau karena dilaporkan sebagai konten negatif.${redirectNote}`;
+  }
+  if (inspection?.ok === false || inspection?.unreachable) {
+    return `URL ${url} perlu ditinjau oleh AduanKonten karena dilaporkan sebagai konten negatif, namun pemeriksaan awal belum berhasil mengakses isi halaman.`;
+  }
+  if (userReason && !isWeakReason(userReason)) {
+    return userReason.slice(0, 800);
+  }
+  return defaultReason(categoryKey, url);
+}
+
+async function classifyWithInspection({ url, userReason, categoryKey, inspection }) {
+  const inspectedText = inspectionHaystack(inspection);
+  const inspectionCategory = detectCategoryHintKey(inspectedText, url);
+  const userCategory = detectCategoryHintKey(userReason, "");
+  const fallbackCategory = inspectionCategory || userCategory || normalizeCategoryKey(categoryKey) || "penipuan";
+  const fallback = {
+    categoryKey: fallbackCategory,
+    reason: reasonFromInspection({
+      url,
+      categoryKey: fallbackCategory,
+      inspection,
+      userReason,
+    }),
+  };
+
+  if (!hasLLM() || !inspection) return fallback;
+
+  try {
+    const parsed = await chatJson({
+      tier: "fast",
+      temperature: 0,
+      maxTokens: 280,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Kamu mengklasifikasikan hasil pemeriksaan awal URL untuk laporan aduankonten.id. " +
+            "Gunakan hanya data pemeriksaan yang diberikan. Jangan mengarang fakta. " +
+            "Return JSON valid: {\"categoryKey\":\"pornografi|perjudian|pencemaran|penipuan|sara|kekerasan|produk_khusus|terorisme|separatisme|hki|keamanan_informasi|rekomendasi_sektor|sosial_budaya|hoaks|pemerasan\",\"reason\":\"alasan laporan 1 kalimat, minimal 20 karakter, diawali 'Berdasarkan pemeriksaan awal' jika memakai hasil pemeriksaan\"}.",
+        },
+        {
+          role: "user",
+          content: JSON.stringify(
+            {
+              url,
+              userReason,
+              currentCategory: categoryKey,
+              inspection: {
+                ok: inspection.ok,
+                input_url: inspection.input_url,
+                final_url: inspection.final_url,
+                host: inspection.host,
+                page_title: inspection.page_title,
+                redirect_chain: inspection.redirect_chain,
+                is_download: inspection.is_download,
+                download_type: inspection.download_type,
+                minta_data_sensitif: inspection.minta_data_sensitif,
+                field_mencurigakan: inspection.field_mencurigakan,
+                render_diblokir: inspection.render_diblokir,
+                error: inspection.error,
+              },
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    });
+    const parsedCategory = inspectionCategory || normalizeCategoryKey(parsed?.categoryKey) || fallback.categoryKey;
+    const parsedReason = String(parsed?.reason || "").trim();
+    const fallbackReason = reasonFromInspection({ url, categoryKey: parsedCategory, inspection, userReason });
+    return {
+      categoryKey: parsedCategory,
+      reason: inspectionCategory ? fallbackReason : parsedReason.length >= 20 && !isWeakReason(parsedReason) ? parsedReason.slice(0, 800) : fallbackReason,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+async function enrichWithUrlInspection(data, userText = "") {
+  if (!data?.url) return data;
+  const userReason = String(data.reason || "").trim();
+  let inspection = null;
+  try {
+    inspection = await inspectUrl(data.url);
+  } catch (err) {
+    inspection = { ok: false, input_url: data.url, final_url: data.url, error: err?.message || String(err) };
+  }
+  const classified = await classifyWithInspection({
+    url: data.url,
+    userReason,
+    categoryKey: data.categoryKey,
+    inspection,
+    userText,
+  });
+  return {
+    ...data,
+    categoryKey: classified.categoryKey,
+    reason: classified.reason,
+  };
+}
+
 async function parseLaporKonten(text) {
   const fallbackUrl = extractUrl(text);
   const fallbackCategory = detectCategoryKey(text, fallbackUrl);
@@ -113,7 +291,7 @@ async function parseLaporKonten(text) {
   const fallback = {
     url: fallbackUrl,
     categoryKey: fallbackCategory,
-    reason: rawReason.length >= 20 ? rawReason.slice(0, 800) : defaultReason(fallbackCategory, fallbackUrl || "konten tersebut"),
+    reason: rawReason.length >= 20 && !isWeakReason(rawReason) ? rawReason.slice(0, 800) : defaultReason(fallbackCategory, fallbackUrl || "konten tersebut"),
   };
 
   if (!hasLLM()) return fallback;
@@ -140,7 +318,7 @@ async function parseLaporKonten(text) {
     const categoryKey = normalizeCategoryKey(parsed?.categoryKey) || fallback.categoryKey;
     const url = cleanUrl(parsed?.url || fallback.url || "");
     const reason = String(parsed?.reason || fallback.reason || defaultReason(categoryKey, url)).trim();
-    return { url: url || null, categoryKey, reason: reason.length >= 20 ? reason.slice(0, 800) : defaultReason(categoryKey, url) };
+    return { url: url || null, categoryKey, reason: reason.length >= 20 && !isWeakReason(reason) ? reason.slice(0, 800) : fallback.reason };
   } catch {
     return fallback;
   }
@@ -149,6 +327,7 @@ async function parseLaporKonten(text) {
 function isAduanKontenIntent(text) {
   if (!text) return false;
   const hasUrl = Boolean(extractUrl(text));
+  if (hasUrl && REPORT_WORDS.test(text) && WEB_REPORT_HINTS.test(text)) return true;
   if (hasUrl && REPORT_WORDS.test(text) && (NEGATIVE_CONTENT_HINTS.test(text) || EXPLICIT_ADUANKONTEN_HINTS.test(text))) return true;
   if (REPORT_WORDS.test(text) && (EXPLICIT_ADUANKONTEN_HINTS.test(text) || /situs\s*judi|website\s*judi|link\s*judi/i.test(text))) return true;
   return false;
@@ -204,7 +383,8 @@ export async function handleLaporKonten({ text, imageText = null, imageBuffer = 
 
   const message = [text, imageText].filter(Boolean).join("\n\n");
   const parsed = await parseLaporKonten(message);
-  const data = buildData(parsed, null, { imageText, imageBuffer, imageMimetype, messageId });
+  let data = buildData(parsed, null, { imageText, imageBuffer, imageMimetype, messageId });
+  data = await enrichWithUrlInspection(data, message);
 
   if (!data.url) {
     pendingKonten.set(sessionId, { stage: "url", data, ts: Date.now() });
@@ -226,7 +406,8 @@ async function consumeLaporKontenReply({ sessionId, text, imageText = null, imag
 
   if (pending.stage === "url") {
     const parsed = await parseLaporKonten([text, pending.data.reason].filter(Boolean).join("\n\n"));
-    const data = buildData(parsed, pending.data, { imageText, imageBuffer, imageMimetype, messageId });
+    let data = buildData(parsed, pending.data, { imageText, imageBuffer, imageMimetype, messageId });
+    data = await enrichWithUrlInspection(data, text);
     if (!data.url) return { reply: ASK_URL };
     pendingKonten.set(sessionId, { stage: "confirm", data, ts: Date.now() });
     return { reply: ASK_CONFIRM(data.categoryKey, data.url, data.reason) };
@@ -234,7 +415,8 @@ async function consumeLaporKontenReply({ sessionId, text, imageText = null, imag
 
   if (pending.stage === "reason") {
     const parsed = await parseLaporKonten([pending.data.url, text, imageText].filter(Boolean).join("\n\n"));
-    const data = buildData(parsed, pending.data, { imageText, imageBuffer, imageMimetype, messageId });
+    let data = buildData(parsed, pending.data, { imageText, imageBuffer, imageMimetype, messageId });
+    data = await enrichWithUrlInspection(data, text);
     if (!data.reason || data.reason.length < 20) return { reply: ASK_REASON };
     pendingKonten.set(sessionId, { stage: "confirm", data, ts: Date.now() });
     return { reply: ASK_CONFIRM(data.categoryKey, data.url, data.reason) };
