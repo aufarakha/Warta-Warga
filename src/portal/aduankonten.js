@@ -692,6 +692,37 @@ export function parseAduanKontenStatus(html, ticket = null) {
   const $ = cheerio.load(html || "");
   $("script, style, noscript, svg").remove();
 
+  function detailByHeading(labelPattern) {
+    let value = "";
+    $("h6").each((_, el) => {
+      if (value) return;
+      const label = cleanText($(el).text()).replace(/:$/, "");
+      if (!labelPattern.test(label)) return;
+      const next = $(el).nextAll("p, .support-box").first();
+      value = cleanText(next.text());
+    });
+    return value;
+  }
+
+  const reportedUrl =
+    absoluteUrl($('p:contains("Link:") a').first().attr("href")) ||
+    cleanText($('p:contains("Link:")').first().text()).replace(/^Link:\s*/i, "") ||
+    null;
+  const previewTitle = cleanText($('[name="title_preview"]').first().text()) || null;
+  const supportCode = cleanText($(".support-code").first().text()) || null;
+  const details = {
+    reportedUrl,
+    previewTitle,
+    status: detailByHeading(/^Status Laporan$/i) || null,
+    totalPelapor: detailByHeading(/^Total Pelapor$/i) || null,
+    tanggalLapor: detailByHeading(/^Tanggal Lapor$/i) || null,
+    tanggalDiperbarui: detailByHeading(/^Tanggal Diperbaharui|Tanggal Diperbarui$/i) || null,
+    category: detailByHeading(/^Kandungan Konten$/i) || null,
+    dasarHukum: detailByHeading(/^Dasar Hukum$/i) || null,
+    officialResponse: detailByHeading(/^Tanggapan Resmi$/i) || null,
+    supportCode,
+  };
+
   const items = [];
   $(".timeline-content, .timeline-item, .timeline, .history, .riwayat, .tracking, .card, .alert").each((_, el) => {
     const $el = $(el);
@@ -731,14 +762,54 @@ export function parseAduanKontenStatus(html, ticket = null) {
     .slice(0, 20);
 
   return {
-    ticket: ticket || ticketMatch?.[0] || null,
-    statusText: statusMatch?.[0] || null,
+    ticket: ticket || details.supportCode || ticketMatch?.[0] || null,
+    statusText: details.status || statusMatch?.[0] || null,
+    details,
     items: filtered,
     text: bodyText.slice(0, 4000),
   };
 }
 
-export async function fetchAduanKontenStatus(ticket, { headless = true } = {}) {
+async function waitForTrackingForm(page, { debugDir = "" } = {}) {
+  const deadline = Date.now() + 90000;
+  while (Date.now() < deadline) {
+    const input = page.locator("#submission_number");
+    if (await input.isVisible().catch(() => false)) return input;
+
+    const searchButton = page.locator("#search_tiket");
+    if (await searchButton.isVisible().catch(() => false)) {
+      await humanClick(page, searchButton).catch(() => {});
+      await input.waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
+      if (await input.isVisible().catch(() => false)) return input;
+    }
+
+    const hasTrackingForm = (await page.locator('form[action*="/submission/check"]').count().catch(() => 0)) > 0;
+    if (hasTrackingForm) {
+      await page.evaluate(() => {
+        document.querySelector("#search_tiket")?.click();
+      }).catch(() => {});
+      await input.waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
+      if (await input.isVisible().catch(() => false)) return input;
+    }
+
+    const body = await page.locator("body").textContent().catch(() => "");
+    if (/Tunggu sebentar|Verifikasi keamanan|Just a moment|Checking your browser|Cloudflare/i.test(body || "")) {
+      const snapshot = await saveDebugSnapshot(page, debugDir, "status-cloudflare");
+      throw new Error(
+        "AduanKonten menampilkan Cloudflare challenge saat lacak status. " +
+          "Jalankan warmup AduanKonten mode headed dulu agar session browser tersimpan, lalu ulangi." +
+          formatDebugSnapshot(snapshot),
+      );
+    }
+
+    await page.waitForTimeout(1000);
+  }
+
+  const snapshot = await saveDebugSnapshot(page, debugDir, "status-form-timeout");
+  throw new Error(`Timeout menunggu form Lacak Aduan AduanKonten.${formatDebugSnapshot(snapshot)}`);
+}
+
+export async function fetchAduanKontenStatus(ticket, { headless = true, debugDir = DEBUG_DIR, challengeWaitMs = 30000 } = {}) {
   const rawTicket = String(ticket || "").trim();
   if (!rawTicket) throw new Error("Kode laporan AduanKonten wajib diisi");
 
@@ -750,22 +821,18 @@ export async function fetchAduanKontenStatus(ticket, { headless = true } = {}) {
 
     await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
     await page.waitForLoadState("networkidle").catch(() => {});
-    await page.waitForSelector('form[action*="/submission/check"], #submission_number, body', { timeout: 90000 });
+    await waitForTrackingForm(page, { debugDir, challengeWaitMs });
 
     const hasForm = (await page.locator('form[action*="/submission/check"]').count().catch(() => 0)) > 0;
     if (hasForm) {
       const input = page.locator("#submission_number");
-      if (!(await input.isVisible().catch(() => false)) && (await page.locator("#search_tiket").count().catch(() => 0)) > 0) {
-        await humanClick(page, page.locator("#search_tiket")).catch(() => {});
-        await input.waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
-      }
-
       if (await input.isVisible().catch(() => false)) {
         await humanFill(page, input, rawTicket);
         await Promise.all([
           page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => null),
           humanClick(page, page.locator("#button_submission_number")),
         ]);
+        await page.waitForURL(/\/submission\/detail\//i, { timeout: 60000 }).catch(() => {});
       } else {
         await page.evaluate((value) => {
           const form = document.querySelector('form[action*="/submission/check"]');

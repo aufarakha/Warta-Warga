@@ -151,6 +151,8 @@ Tanpa LLM, kategori ditentukan dengan heuristik keyword. Jika LLM aktif, hasilny
 
 Checker membuka form lacak AduanKonten, submit kode laporan, parse status yang tersedia, lalu mengirim notifikasi WhatsApp jika fingerprint status berubah.
 
+Saat bot WhatsApp baru connect, scheduler hanya didaftarkan. AduanKonten tidak langsung dibuka kecuali `ADUANKONTEN_CHECK_ON_BOOT=true`. Default ini sengaja dipakai karena flow status berjalan headed dan bisa memunculkan browser/Cloudflare ketika proses baru start.
+
 ## Batasan
 
 - `--submit` mengirim laporan produksi resmi. Jangan gunakan dengan URL dummy.

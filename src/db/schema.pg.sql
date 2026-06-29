@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS laporan_layanan (
   timestamp        TEXT NOT NULL,
   submitted_at     TEXT,
   last_status_check TEXT,
+  last_status_notified_at TEXT,
   notes            TEXT
 );
 

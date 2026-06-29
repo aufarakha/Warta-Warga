@@ -32,6 +32,7 @@ function sqliteDb() {
   ensureColumn(_sqlite, 'log_interaksi', 'aksi', 'TEXT');
   ensureColumn(_sqlite, 'log_interaksi', 'ringkas_pesan', 'TEXT');
   ensureColumn(_sqlite, 'log_interaksi', 'ringkas_resp', 'TEXT');
+  ensureColumn(_sqlite, 'laporan_layanan', 'last_status_notified_at', 'TEXT');
   return _sqlite;
 }
 
@@ -53,6 +54,11 @@ async function pgInit() {
   }
   try {
     await _pg`ALTER TABLE info_bansos ADD COLUMN IF NOT EXISTS image_path TEXT`;
+  } catch (err) {
+    /* ignore if column exists or alter not supported */
+  }
+  try {
+    await _pg`ALTER TABLE laporan_layanan ADD COLUMN IF NOT EXISTS last_status_notified_at TEXT`;
   } catch (err) {
     /* ignore if column exists or alter not supported */
   }
@@ -417,6 +423,10 @@ export async function updateLaporanLayananStatus(id, status, fields = {}) {
     updates.push("last_status_check = ?");
     params.push(fields.last_status_check);
   }
+  if (fields.last_status_notified_at !== undefined) {
+    updates.push("last_status_notified_at = ?");
+    params.push(fields.last_status_notified_at);
+  }
   if (fields.notes !== undefined) {
     updates.push("notes = ?");
     params.push(fields.notes);
@@ -439,6 +449,10 @@ export async function updateLaporanLayananStatus(id, status, fields = {}) {
     if (fields.last_status_check !== undefined) {
       setters.push(`last_status_check = $${values.length + 1}`);
       values.push(fields.last_status_check);
+    }
+    if (fields.last_status_notified_at !== undefined) {
+      setters.push(`last_status_notified_at = $${values.length + 1}`);
+      values.push(fields.last_status_notified_at);
     }
     if (fields.notes !== undefined) {
       setters.push(`notes = $${values.length + 1}`);
@@ -481,6 +495,36 @@ export async function listSubmittedLaporanLayanan({ portalTarget = null } = {}) 
     return sq().prepare(`SELECT * FROM laporan_layanan WHERE status = 'submitted' AND portal_target = ? ORDER BY timestamp ASC`).all(portalTarget);
   }
   return sq().prepare(`SELECT * FROM laporan_layanan WHERE status = 'submitted' ORDER BY timestamp ASC`).all();
+}
+
+export async function listAduanKontenReportsForSession(sessionId, { limit = 30 } = {}) {
+  await initDb();
+  const normalizedLimit = Math.max(1, Math.min(100, Number(limit) || 30));
+  if (hasSupabase()) {
+    return [
+      ...(await _pg`
+        SELECT *
+        FROM laporan_layanan
+        WHERE portal_target = 'aduankonten'
+          AND session_id = ${sessionId}
+          AND nomor_ticket IS NOT NULL
+          AND nomor_ticket <> ''
+        ORDER BY COALESCE(submitted_at, timestamp) DESC, id DESC
+        LIMIT ${normalizedLimit}`),
+    ];
+  }
+  return sq()
+    .prepare(
+      `SELECT *
+       FROM laporan_layanan
+       WHERE portal_target = 'aduankonten'
+         AND session_id = ?
+         AND nomor_ticket IS NOT NULL
+         AND nomor_ticket <> ''
+       ORDER BY COALESCE(submitted_at, timestamp) DESC, id DESC
+       LIMIT ?`,
+    )
+    .all(sessionId, normalizedLimit);
 }
 
 export async function insertLaporanLayananSubmitLog({ laporanId, portal, attempt, status, errorMsg }) {

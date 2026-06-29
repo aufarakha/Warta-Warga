@@ -42,6 +42,7 @@ export const config = {
     userAgent: process.env.ADUANKONTEN_USER_AGENT || "",
     browserChannel: process.env.ADUANKONTEN_BROWSER_CHANNEL || "",
     checkIntervalHours: Number(process.env.ADUANKONTEN_CHECK_INTERVAL_HOURS || 6),
+    checkOnBoot: (process.env.ADUANKONTEN_CHECK_ON_BOOT ?? "false") === "true",
   },
 
   cloudflareCaptcha: {
