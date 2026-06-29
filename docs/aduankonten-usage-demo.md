@@ -186,6 +186,19 @@ Master switch:
 AGENT2_LAYANAN_CHECKERS_ENABLED=true
 ```
 
+Secara default, AduanKonten tidak langsung dicek saat `npm start` agar browser headed tidak terbuka ketika bot baru connect. Cek pertama berjalan pada interval berikutnya.
+
+```env
+ADUANKONTEN_CHECK_ON_BOOT=false
+ADUANKONTEN_CHECK_INTERVAL_HOURS=6
+```
+
+Jika memang ingin langsung cek status saat startup:
+
+```env
+ADUANKONTEN_CHECK_ON_BOOT=true
+```
+
 Matikan hanya AduanKonten:
 
 ```env

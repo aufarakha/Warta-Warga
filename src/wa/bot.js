@@ -6,6 +6,7 @@ import { config, hasSearch, hasVision } from "../config.js";
 import { getGrup, upsertGrup, countInfoByWilayah } from "../db/index.js";
 import { respondToMessage, GREETING } from "../agent2/handler.js";
 import { handleLaporKonten } from "../agent2/lapor-konten.js";
+import { handleAduanKontenStatus } from "../agent2/aduankonten-status.js";
 import { handleLaporLayanan } from "../agent2/lapor-layanan.js";
 import { setLaporgubNotifier } from "../agent2/laporgub-checker.js";
 import { setAduanKontenNotifier } from "../agent2/aduankonten-checker.js";
@@ -410,6 +411,12 @@ async function handleContent(sock, jid, { text, konteks, scopeTags, wilayahTag, 
 
   // Brain memutuskan aksi + menulis respons sekaligus (1 LLM call). Discovery regional diputuskan
   // dari aksi-nya: pertanyaan info untuk daerah yang belum ada datanya → tawarkan scrape on-demand.
+  const aduanKontenStatusResult = await handleAduanKontenStatus({ text, sessionId });
+  if (aduanKontenStatusResult?.reply) {
+    await send(aduanKontenStatusResult.reply);
+    return;
+  }
+
   const kontenResult = await handleLaporKonten({ text, imageText, imageBuffer, imageMimetype, sessionId, messageId });
   if (kontenResult?.reply) {
     await send(kontenResult.reply);

@@ -38,6 +38,18 @@ function statusUrl() {
   return String(config.aduankonten.baseUrl || "https://aduankonten.id").replace(/\/+$/, "");
 }
 
+function statusNotifyIntervalMs() {
+  const hours = Number(config.aduankonten.checkIntervalHours || 6);
+  return Math.max(1, Number.isFinite(hours) ? hours : 6) * 60 * 60 * 1000;
+}
+
+function isStatusNotificationDue(lastNotifiedAt) {
+  if (!lastNotifiedAt) return true;
+  const last = Date.parse(lastNotifiedAt);
+  if (!Number.isFinite(last)) return true;
+  return Date.now() - last >= statusNotifyIntervalMs();
+}
+
 export function setAduanKontenNotifier(fn) {
   _notifySender = typeof fn === "function" ? fn : null;
 }
@@ -60,7 +72,8 @@ function meaningfulItems(parsed) {
       status: cleanText(item.status),
       description: cleanText(item.description),
     }))
-    .filter((item) => item.title || item.date || item.status || item.description);
+    .filter((item) => item.title || item.date || item.status || item.description)
+    .filter((item) => !/^(Tinjauan Laporan|Detail Laporan)$/i.test(item.title));
 }
 
 function fingerprintStatus(parsed) {
@@ -71,6 +84,20 @@ function fingerprintStatus(parsed) {
     text: cleanText(parsed?.text || "").slice(0, 2000),
   };
   return sha1(JSON.stringify(payload));
+}
+
+function detailLines(parsed) {
+  const d = parsed?.details || {};
+  const lines = [];
+  if (d.status) lines.push(`Status laporan: ${d.status}`);
+  if (d.category) lines.push(`Kandungan konten: ${d.category}`);
+  if (d.reportedUrl) lines.push(`Link laporan: ${d.reportedUrl}`);
+  if (d.previewTitle) lines.push(`Tinjauan: ${d.previewTitle}`);
+  if (d.totalPelapor) lines.push(`Total pelapor: ${d.totalPelapor}`);
+  if (d.tanggalLapor) lines.push(`Tanggal lapor: ${d.tanggalLapor}`);
+  if (d.tanggalDiperbarui) lines.push(`Terakhir diperbarui: ${d.tanggalDiperbarui}`);
+  if (d.officialResponse) lines.push(`Tanggapan resmi: ${d.officialResponse.slice(0, 700)}`);
+  return lines;
 }
 
 async function formatWithLLM(parsed) {
@@ -114,6 +141,12 @@ async function formatWithLLM(parsed) {
 function formatTemplate(ticket, parsed) {
   const items = meaningfulItems(parsed);
   const lines = [];
+  const details = detailLines(parsed);
+  if (details.length) {
+    lines.push(...details);
+    lines.push("");
+  }
+
   if (items.length) {
     for (const item of items.slice(0, 8)) {
       lines.push(`- *${item.title || item.status || "Pembaruan"}*`);
@@ -122,9 +155,9 @@ function formatTemplate(ticket, parsed) {
       if (item.description && item.description !== item.title) lines.push(`  Isi: ${item.description}`);
       lines.push("");
     }
-  } else if (parsed.statusText) {
+  } else if (parsed.statusText && !details.length) {
     lines.push(`Status terdeteksi: ${parsed.statusText}`);
-  } else {
+  } else if (!details.length) {
     lines.push("Ada perubahan pada halaman lacak AduanKonten, tetapi detail status belum bisa dipisahkan otomatis.");
   }
 
@@ -135,12 +168,14 @@ function formatTemplate(ticket, parsed) {
   return { items, conclusion, text: lines.join("\n") };
 }
 
-function buildNotificationText(ticket, parsed, llmJson = null) {
+function buildNotificationText(ticket, parsed, llmJson = null, { kind = "update" } = {}) {
   const lines = [];
-  lines.push(`Pembaruan AduanKonten - kode ${ticket}`);
+  const isUpdate = kind === "update";
+  const heading = isUpdate ? "Pembaruan AduanKonten" : "Status AduanKonten";
+  lines.push(`${heading} - kode ${ticket}`);
   lines.push(`Lacak di: ${statusUrl()}`);
   lines.push("");
-  lines.push("Ada pembaruan baru pada laporan Anda:");
+  lines.push(isUpdate ? "Ada pembaruan baru pada laporan Anda:" : "Status terkini laporan Anda:");
   lines.push("");
 
   let body = null;
@@ -164,6 +199,10 @@ function buildNotificationText(ticket, parsed, llmJson = null) {
   return lines.join("\n");
 }
 
+export function buildAduanKontenStatusText(ticket, parsed, { kind = "manual" } = {}) {
+  return buildNotificationText(ticket, parsed, null, { kind });
+}
+
 export async function checkAduanKontenReport(laporan) {
   if (!laporan || !laporan.id) {
     throw new Error("Invalid laporan_layanan record");
@@ -173,7 +212,7 @@ export async function checkAduanKontenReport(laporan) {
   }
 
   const ticket = String(laporan.nomor_ticket).trim();
-  const parsed = await fetchAduanKontenStatus(ticket);
+  const parsed = await fetchAduanKontenStatus(ticket, { headless: false });
   const items = meaningfulItems(parsed);
   if (!items.length && !parsed.statusText && !parsed.text) {
     return { id: laporan.id, status: "skip_no_status", ticket };
@@ -181,7 +220,9 @@ export async function checkAduanKontenReport(laporan) {
 
   const fingerprint = fingerprintStatus(parsed);
   const prev = await getLaporanLayanan(laporan.id);
-  if (prev?.last_status_check === fingerprint) {
+  const changed = prev?.last_status_check !== fingerprint;
+  const notifyDue = isStatusNotificationDue(prev?.last_status_notified_at);
+  if (!changed && !notifyDue) {
     return { id: laporan.id, status: "unchanged", ticket };
   }
 
@@ -194,7 +235,7 @@ export async function checkAduanKontenReport(laporan) {
     }
   }
 
-  const text = buildNotificationText(ticket, parsed, llmJson);
+  const text = buildNotificationText(ticket, parsed, llmJson, { kind: changed ? "update" : "periodic" });
   const recipientJid = recipientJidFromSessionId(laporan.session_id);
   if (!recipientJid) {
     return { id: laporan.id, status: "skip_no_recipient", ticket, text };
@@ -205,8 +246,11 @@ export async function checkAduanKontenReport(laporan) {
 
   try {
     await sendAduanKontenNotification(recipientJid, text);
-    await updateLaporanLayananStatus(laporan.id, laporan.status, { last_status_check: fingerprint });
-    return { id: laporan.id, status: "sent", ticket, recipientJid };
+    await updateLaporanLayananStatus(laporan.id, laporan.status, {
+      last_status_check: fingerprint,
+      last_status_notified_at: new Date().toISOString(),
+    });
+    return { id: laporan.id, status: changed ? "sent" : "sent_periodic", ticket, recipientJid };
   } catch (err) {
     return { id: laporan.id, status: "send_failed", ticket, recipientJid, error: err.message || String(err) };
   }
@@ -226,6 +270,8 @@ export async function runAduanKontenCheckerOnce() {
         const result = await checkAduanKontenReport(lap);
         if (result.status === "sent") {
           console.log(`[aduankonten-checker] update dikirim untuk ticket=${result.ticket} ke ${result.recipientJid}`);
+        } else if (result.status === "sent_periodic") {
+          console.log(`[aduankonten-checker] status berkala dikirim untuk ticket=${result.ticket} ke ${result.recipientJid}`);
         } else if (result.status === "unchanged") {
           console.log(`[aduankonten-checker] tidak ada perubahan untuk ticket=${result.ticket}`);
         } else if (result.status.startsWith("skip")) {
@@ -244,7 +290,7 @@ export async function runAduanKontenCheckerOnce() {
 
 export async function runAduanKontenCheckerForTicket(ticket) {
   console.log(`[aduankonten-checker] debug run untuk ticket=${ticket}`);
-  const parsed = await fetchAduanKontenStatus(ticket);
+  const parsed = await fetchAduanKontenStatus(ticket, { headless: false });
   const items = meaningfulItems(parsed);
   console.log(`[aduankonten-checker] parsed items count=${items.length}`);
   console.log("[aduankonten-checker] statusText=", parsed.statusText || "-");
@@ -268,5 +314,9 @@ export function startAduanKontenChecker() {
   }, ms);
   _timer.unref?.();
   console.log(`[aduankonten-checker] scheduler aktif tiap ${intervalHours} jam.`);
-  runAduanKontenCheckerOnce().catch((err) => console.warn("[aduankonten-checker] error saat startup:", err?.message || err));
+  if (config.aduankonten.checkOnBoot) {
+    runAduanKontenCheckerOnce().catch((err) => console.warn("[aduankonten-checker] error saat startup:", err?.message || err));
+  } else {
+    console.log("[aduankonten-checker] cek saat startup nonaktif. Cek pertama berjalan pada interval berikutnya.");
+  }
 }
