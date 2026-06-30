@@ -5,7 +5,7 @@ import makeWASocket, { useMultiFileAuthState, fetchLatestBaileysVersion, Disconn
 import { config, hasSearch, hasVision } from "../config.js";
 import { getGrup, upsertGrup, countInfoByWilayah } from "../db/index.js";
 import { respondToMessage, GREETING } from "../agent2/handler.js";
-import { handleLaporKonten, hasPendingLaporKonten, maybeOfferAduanKontenReport, rememberAduanKontenUrlFromText } from "../agent2/lapor-konten.js";
+import { handleLaporKonten, maybeOfferAduanKontenReport, rememberAduanKontenUrlFromText } from "../agent2/lapor-konten.js";
 import { handleAduanKontenStatus } from "../agent2/aduankonten-status.js";
 import { handleLaporLayanan, hasPendingLaporanLayanan, isPublicServiceReportIntent, storeImageForSession } from "../agent2/lapor-layanan.js";
 import { setLaporgubNotifier } from "../agent2/laporgub-checker.js";
@@ -374,18 +374,15 @@ async function handleGroup(sock, jid, msg, text, botJid, send, imageText = null,
     return;
   }
 
-  // F2.2: di grup, hanya merespons saat di-mention. Pengecualian:
-  // balasan lanjutan untuk pending AduanKonten/LaporGub dari pengirim yang sama.
-  const mentioned = isMentioned(msg, sock);
+  // F2.2: di grup, hanya merespons saat bot di-mention atau pesan user me-reply bot.
+  const addressed = isMentioned(msg, sock);
   const sender = userPart(msg.key.participant || msg.participant || jid);
   const sessionId = `${jid}:${sender}`;
-  const hasPendingAduanKonten = hasPendingLaporKonten(sessionId);
-  const hasPendingLayanan = hasPendingLaporanLayanan(sessionId);
   if (process.env.WA_DEBUG) {
     const ctx = unwrap(msg.message)?.extendedTextMessage?.contextInfo;
-    console.log("[grup-debug] mention=%s pendingAduanKonten=%s pendingLayanan=%s | bot.id=%s bot.lid=%s | mentionedJid=%j", mentioned, hasPendingAduanKonten, hasPendingLayanan, sock?.user?.id, sock?.user?.lid, ctx?.mentionedJid || []);
+    console.log("[grup-debug] addressed=%s | bot.id=%s bot.lid=%s | mentionedJid=%j participant=%s", addressed, sock?.user?.id, sock?.user?.lid, ctx?.mentionedJid || [], ctx?.participant || "");
   }
-  if (!mentioned && !hasPendingAduanKonten && !hasPendingLayanan) return;
+  if (!addressed) return;
 
   await markRead(sock, msg);
   await presence(sock, jid, "composing");
